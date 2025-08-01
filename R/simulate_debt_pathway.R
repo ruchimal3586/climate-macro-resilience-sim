@@ -1,14 +1,22 @@
-simulate_debt_pathway <- function(years = 30,
-                                  gdp_init = 100,
-                                  debt_init = 50,
-                                  rev_ratio = 0.15,
-                                  spend_ratio = 0.18,
-                                  shock_prob = 0.2,
-                                  shock_loss_pct = 0.05,
-                                  emergency_spend_pct = 0.03,
-                                  adaptation_cost_pct = 0.02,
-                                  adaptation_years = 5,
-                                  adaptation_effectiveness = 0.5,
+
+# ------------------------------------------------------------------------------
+# simulate_debt_pathway()
+# ------------------------------------------------------------------------------
+# Simulates sovereign debt trajectory under climate shock and adaptation scenarios.
+# Parameters must be passed explicitly for transparency and scenario control.
+# ------------------------------------------------------------------------------
+
+simulate_debt_pathway <- function(years,
+                                  gdp_init,
+                                  debt_init,
+                                  rev_ratio,
+                                  spend_ratio,
+                                  shock_prob,
+                                  shock_loss_pct,
+                                  emergency_spend_pct,
+                                  adaptation_cost_pct,
+                                  adaptation_years,
+                                  adaptation_effectiveness,
                                   run_adaptation = TRUE,
                                   seed = 123) {
   
@@ -25,7 +33,7 @@ simulate_debt_pathway <- function(years = 30,
   for (t in 1:years) {
     adapt_cost <- if (run_adaptation && t <= adaptation_years) adaptation_cost_pct else 0
     
-    gdp <- gdp - (gdp * adapt_cost)
+   # gdp <- gdp - (gdp * adapt_cost) just treating adaptation as fiscal cost alone and no GDP penalty
     spend <- spend_ratio * gdp + gdp * adapt_cost
     shock <- runif(1) < shock_prob
     
@@ -49,7 +57,7 @@ simulate_debt_pathway <- function(years = 30,
   return(results)
 }
 
-------------------------------------------------------------------------------
+
   # simulate_multiple_runs()
   # ------------------------------------------------------------------------------
 # Runs multiple iterations (n) of the sovereign debt simulation model to account
