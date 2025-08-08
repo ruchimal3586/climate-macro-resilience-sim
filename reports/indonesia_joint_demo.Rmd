@@ -1,0 +1,196 @@
+---
+title: "Indonesia macro shocks - corporate cash flows"
+author: "Ruchi Malhotra"
+date: "2025-08-08"
+output: html_document
+output_dir: "../"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(scales)
+
+source("../R/simulate_debt_pathway.R")
+source("../R/run_joint_path.R")
+source("../R/run_joint_multiple.R")
+source("../R/company_pl.R")
+source("../R/params_indonesia.R")
+
+assets <- read_csv("../data/assets_companyA.csv")
+```
+
+
+```{r}
+
+# Ensure horizon + adaptation toggle set
+params_country <- list(
+  years = 40,
+  gdp_init = gdp_init, debt_init = debt_init,
+  rev_ratio = rev_ratio, spend_ratio = spend_ratio,
+  shock_prob = shock_prob, shock_loss_pct = shock_loss_pct,
+  emergency_spend_pct = emergency_spend_pct,
+  adaptation_cost_pct = adaptation_cost_pct,
+  adaptation_years = adaptation_years,
+  adaptation_effectiveness = adaptation_effectiveness,
+  run_adaptation = TRUE
+)
+
+set.seed(42)
+joint <- run_joint_multiple(
+  n = 500,
+  params_country = params_country,
+  company_assets = assets,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  demand_elasticity = 1.2,
+  intensity_sampler = function() rgamma(1, shape=2, rate=1.1)
+)
+
+```
+
+
+```{r}
+summary_fc <- joint %>%
+  group_by(year) %>%
+  summarise(
+    FCF_p10 = quantile(FCF, 0.10, na.rm=TRUE),
+    FCF_p50 = quantile(FCF, 0.50, na.rm=TRUE),
+    FCF_p90 = quantile(FCF, 0.90, na.rm=TRUE),
+    Downtime_mean = mean(Downtime_days, na.rm=TRUE)
+  )
+
+macro <- joint %>%
+  group_by(year) %>%
+  summarise(
+    Debt_to_GDP = median(Debt_to_GDP, na.rm=TRUE),
+    ShockRate = mean(Shock, na.rm=TRUE)
+  )
+```
+
+```{r}
+
+summary_fc_m <- summary_fc %>%
+  mutate(across(starts_with("FCF_"), ~ . / 1e6))
+
+ggplot(summary_fc_m, aes(year, FCF_p50)) +
+  geom_ribbon(aes(ymin = FCF_p10, ymax = FCF_p90), alpha = 0.2) +
+  geom_line(size = 1) +
+  scale_y_continuous(labels = label_comma(), name = "FCF (millions)") +
+  labs(title = "FCF (P10–P90) under Macro-Conditioned Shocks",
+       subtitle = "Facility downtime → P&L → FCF distribution") +
+  theme_minimal()
+
+```
+
+```{r}
+# Baseline: same setup, but no shocks at all
+params_baseline <- params_country; params_baseline$shock_prob <- 0
+baseline <- run_joint_multiple(
+  n = 50,  # few runs to smooth out demand elasticity noise
+  params_country = params_baseline,
+  company_assets = assets,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  demand_elasticity = 1.2,
+  intensity_sampler = function() 0  # irrelevant; no shocks
+)
+
+baseline_fcf <- baseline %>%
+  group_by(year) %>%
+  summarise(FCF_base = median(FCF, na.rm = TRUE), .groups = "drop")
+
+dd <- summary_fc %>%
+  left_join(baseline_fcf, by = "year") %>%
+  mutate(
+    dd_p50 = (FCF_p50 - FCF_base) / FCF_base,
+    dd_p10 = (FCF_p10 - FCF_base) / FCF_base,
+    dd_p90 = (FCF_p90 - FCF_base) / FCF_base
+  )
+
+ggplot(dd, aes(year, dd_p50)) +
+  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
+  geom_line(size = 1) +
+  scale_y_continuous(labels = percent, name = "FCF drawdown vs no-shock baseline") +
+  labs(title = "Shock Impact on FCF (P10–P90)",
+       subtitle = "Percent deviation from a no-shock baseline") +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+ggplot(dd, aes(year, dd_p50)) +
+  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
+  geom_line(size = 1) +
+  geom_segment(data = macro %>% filter(ShockRate > 0),
+               aes(x = year, xend = year, y = -0.02, yend = -0.01, alpha = ShockRate),
+               inherit.aes = FALSE) +
+  scale_alpha(range = c(0.2, 0.8), guide = "none") +
+  scale_y_continuous(labels = percent, name = "FCF drawdown vs baseline") +
+  labs(title = "Shock Timing/Rate vs FCF Drawdown",
+       subtitle = "Ticks at bottom indicate higher realized shock rates") +
+  theme_minimal()
+
+
+```
+
+```{r}
+
+# 1) Pick a scaling constant from your drawdown band
+k <- abs(min(dd$dd_p10, dd$dd_p90, na.rm = TRUE))  # e.g., ~0.40
+
+# 2) Join macro shock rate and create a scaled version for plotting
+dd_plot <- dd %>%
+  left_join(macro %>% select(year, ShockRate), by = "year") %>%
+  mutate(ShockRate_scaled = -ShockRate * k)
+
+# 3) Plot: FCF drawdown band + median + shock probability (right axis)
+ggplot(dd_plot, aes(x = year)) +
+  # FCF drawdown band (P10–P90)
+  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
+  # FCF median
+  geom_line(aes(y = dd_p50, color = "FCF drawdown (median)"), size = 1) +
+  # Shock probability, scaled to left axis; right axis shows true 0–1
+  geom_line(aes(y = ShockRate_scaled, color = "Shock probability"),
+            size = 1, linetype = "dashed") +
+  scale_y_continuous(
+    labels = percent, name = "FCF drawdown vs baseline",
+    sec.axis = sec_axis(~ -./k, name = "Shock probability")
+  ) +
+  scale_color_manual(values = c("FCF drawdown (median)" = "black",
+                                "Shock probability" = "gray30")) +
+  labs(title = "Macro hazard vs corporate FCF",
+       subtitle = "Median FCF drawdown (band shows P10–P90) with shock probability (right axis)") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+
+```
+
+
+```{r}
+
+ggplot(macro, aes(year, Debt_to_GDP)) +
+  geom_line(size=1) +
+  labs(
+    title = "Median Debt-to-GDP (Macro Context)",
+    y = "Debt/GDP", x = "Year"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r }
+knitr::kable(
+  head(joint %>% select(year, Shock, EBIT, FCF, Downtime_days, Debt_to_GDP)),
+  digits = 2,
+  caption = "Sample of joint macro→micro outputs"
+)
+
+
+```
+

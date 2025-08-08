@@ -1,0 +1,158 @@
+---
+title: "Indonesia adaptation simulation"
+author: "Ruchi Malhotra"
+date: "2025-07-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+source("../R/simulate_debt_pathway.R")
+source("../R/params_indonesia.R")
+```
+
+## Scenario Simulation
+
+```{r simulate-multirun, echo = FALSE}
+results_no_adapt <- simulate_multiple_runs(n = 100, run_adaptation = FALSE,
+                                           years = 40,
+                                           gdp_init = gdp_init,
+                                           debt_init = debt_init,
+                                           rev_ratio = rev_ratio,
+                                           spend_ratio = spend_ratio,
+                                           shock_prob = shock_prob,
+                                           shock_loss_pct = shock_loss_pct,
+                                           emergency_spend_pct = emergency_spend_pct,
+                                           adaptation_cost_pct = adaptation_cost_pct,
+                                           adaptation_years = adaptation_years,
+                                           adaptation_effectiveness = adaptation_effectiveness)
+
+results_adapt <- simulate_multiple_runs(n = 100, run_adaptation = TRUE,
+                                        years = 40,
+                                        gdp_init = gdp_init,
+                                        debt_init = debt_init,
+                                        rev_ratio = rev_ratio,
+                                        spend_ratio = spend_ratio,
+                                        shock_prob = shock_prob,
+                                        shock_loss_pct = shock_loss_pct,
+                                        emergency_spend_pct = emergency_spend_pct,
+                                        adaptation_cost_pct = adaptation_cost_pct,
+                                        adaptation_years = adaptation_years,
+                                        adaptation_effectiveness = adaptation_effectiveness)
+
+all_results <- rbind(results_no_adapt, results_adapt)
+
+```
+
+```{r shock-summary}
+# Show how often shocks occurred in each scenario
+table(all_results$Scenario, all_results$Shock)
+
+```
+
+## Debt-to-GDP trajectories
+
+```{r plot-debt, echo = FALSE}
+
+# 1. Average across simulations
+avg_trend <- all_results %>%
+  group_by(year, Scenario) %>%
+  summarise(debt = median(Debt_to_GDP), .groups = "drop") #since median is robust to extreme GDP collapses
+
+# 2. Widen into columns: one per scenario
+debt_wide <- avg_trend %>%
+  pivot_wider(names_from = Scenario, values_from = debt)
+
+# 3. Calculate the difference: NoAdapt - Adapt
+debt_wide <- debt_wide %>%
+  mutate(gap = `No Adaptation` - Adaptation)
+
+```
+
+```{r plot-debt, fig.width=6, fig.height=5, echo = FALSE}
+
+ggplot(avg_trend, aes(x = year, y = debt, color = Scenario)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "Median Debt-to-GDP Ratio Over Time (100 Simulations)",
+    subtitle = "Adaptation increases debt burden due to front-loaded spending and limited offset from shocks",
+    y = "Debt-to-GDP Ratio", x = "Year",
+    caption = "Shows the median debt ratio each year across \n100 runs. Adaptation increases fiscal pressure \nwithout reversing the trend by year 40."
+  ) +
+  theme_minimal() +
+  theme(plot.caption = element_text(size = 9, hjust = 0)
+  )
+
+```
+
+## GDP Plot
+
+```{r plot-gdp, fig.width=6, fig.height=5, echo = FALSE}
+ggplot(all_results, aes(x = year, y = GDP, color = Scenario)) +
+  geom_line(alpha = 0.3) +
+  stat_summary(fun = median, geom = "line", size = 1.2) +
+  labs(
+    title = "Simulated GDP Paths Over Time",
+    subtitle = "Adaptation helps preserve economic output by reducing climate shock impacts",
+    y = "GDP (normalized)", x = "Year",
+    caption = "Thin lines show individual simulations; bold line shows \nmedian GDP path. Adaptation preserves \nGDP more effectively over time."
+  ) +
+  theme_minimal() +
+  theme(plot.caption = element_text(size = 9, hjust = 0)
+  )
+
+
+```
+
+
+## 💸 Nominal Debt Plot
+
+```{r plot-debt-absolute, fig.width=6, fig.height=5, echo = FALSE}
+ggplot(all_results, aes(x = year, y = Debt, color = Scenario)) +
+  geom_line(alpha = 0.3) +
+  stat_summary(fun = median, geom = "line", size = 1.2) +
+  labs(
+    title = "Simulated Government Debt Over Time",
+    subtitle = "Adaptation raises total debt through additional spending, with partial offset from avoided shocks",
+    y = "Nominal Debt", x = "Year",
+    caption = "Adaptation scenarios accumulate more debt due \nto upfront investment. Benefits are not large \nenough to lower total debt within 40 years."
+  ) +
+  theme_minimal() +
+  theme(plot.caption = element_text(size = 9, hjust = 0)
+  )
+
+
+```
+
+
+## 🔁 Debt Gap Plot
+
+
+```{r plot-gap, fig.width=6, fig.height=5, echo = FALSE}
+ggplot(debt_wide, aes(x = year, y = gap)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  labs(
+    title = "Difference in Debt Burden (No Adaptation – Adaptation)",
+    subtitle = "Positive values imply adaptation reduces debt burden; declining line indicates narrowing benefit",
+    y = "Δ Debt-to-GDP Ratio", x = "Year",
+    caption = "Adaptation initially narrows the debt gap,\n but does not deliver net savings in this setup. \nThe benefit flattens or reverses in later years."
+  ) +
+  theme_minimal() +
+  theme(plot.caption = element_text(size = 9, hjust = 0)
+  )
+
+```
+
+
+
+## Interpretation
+
+- **Without adaptation**, climate shocks lower GDP and require emergency spending, causing the debt burden to rise steadily.
+- **With adaptation**, upfront investment increases debt early on, but helps preserve GDP and reduce shock impacts over time.
+- However, in this simulation, the **fiscal cost of adaptation outweighs its benefits** within the 40-year horizon.
+- Adaptation protects GDP but does **not reduce total debt** or debt-to-GDP in this configuration.
+- A longer time frame, more frequent shocks, or higher adaptation effectiveness may be needed for the investment to “pay off.”

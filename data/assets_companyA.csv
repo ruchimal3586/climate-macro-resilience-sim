@@ -1,0 +1,3 @@
+"asset_id","asset_value","daily_revenue","gross_margin","price_pass_through","insurance_deductible","insurance_limit"
+"PLANT_A",4e+08,1200000,0.38,0.25,0.01,0.3
+"DC_B",1.5e+08,5e+05,0.3,0.15,0.01,0.3

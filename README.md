@@ -7,3 +7,6 @@ This model is inspired by the adaptation–debt tradeoff pathways introduced in 
 ## 📊 View Simulation Report
 
 ➡️ [Click here to view the Indonesia adaptation simulation](https://ruchimal3586.github.io/climate-macro-resilience-sim/indonesia_simulation.html)
+
+## 📊 View Company Impact Demo
+➡️ [Click here to view the macro → corporate cash flow simulation](indonesia_joint_demo.html)

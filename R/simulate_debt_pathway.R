@@ -35,19 +35,22 @@ simulate_debt_pathway <- function(years,
     
    # gdp <- gdp - (gdp * adapt_cost) just treating adaptation as fiscal cost alone and no GDP penalty
     spend <- spend_ratio * gdp + gdp * adapt_cost
+    # ---- Stochastic shock occurrence (Bernoulli) ----
     shock <- runif(1) < shock_prob
     
     if (shock) {
       loss <- shock_loss_pct * (1 - if (run_adaptation) adaptation_effectiveness else 1)
+      # Emergency spend also reduced by adaptation effectiveness
       emerg_spend <- emergency_spend_pct * (1 - if (run_adaptation) adaptation_effectiveness else 1)
       gdp <- gdp * (1 - loss)
       spend <- spend + gdp * emerg_spend
     }
-    
+    # Revenues scale with (post-shock) GDP
     revenue <- rev_ratio * gdp
     deficit <- spend - revenue
     debt <- debt + deficit
     
+    # Record
     results$GDP[t] <- gdp
     results$Debt[t] <- debt
     results$Debt_to_GDP[t] <- debt / gdp
@@ -58,7 +61,7 @@ simulate_debt_pathway <- function(years,
 }
 
 
-  # simulate_multiple_runs()
+# simulate_multiple_runs()
   # ------------------------------------------------------------------------------
 # Runs multiple iterations (n) of the sovereign debt simulation model to account
 # for randomness in climate shock timing and impact.
@@ -66,6 +69,10 @@ simulate_debt_pathway <- function(years,
 # This function calls simulate_debt_pathway() for both adaptation and no-adaptation
 # scenarios, assigns unique seeds for reproducibility, and binds results across runs.
 #
+# PURPOSE:
+#   Run the sovereign simulator repeatedly to capture randomness in shock timing.
+#   Adds a sim_id, and labels scenario as "Adaptation" vs "No Adaptation".
+# ------------------------------------------------------------------------------
 # Arguments:
 #   - n: number of simulation runs (e.g., 100)
 #   - run_adaptation: whether to include adaptation costs/effects

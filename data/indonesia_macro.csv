@@ -1,0 +1,11 @@
+"variable","value"
+"gdp_init",100
+"debt_init",60
+"rev_ratio",0.14
+"spend_ratio",0.18
+"shock_prob",0.25
+"shock_loss_pct",0.06
+"emergency_spend_pct",0.025
+"adaptation_cost_pct",0.02
+"adaptation_years",5
+"adaptation_effectiveness",0.5
