@@ -1,0 +1,11 @@
+---
+title: "index"
+author: "Ruchi Malhotra"
+date: "2025-08-08"
+output: html_document
+---
+
+# Simulation Reports
+
+- [Indonesia adaptation (macro)](indonesia_simulation.html)
+- [Macro → corporate cash flow demo](indonesia_joint_demo.html)
