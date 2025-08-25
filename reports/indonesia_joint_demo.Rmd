@@ -21,6 +21,28 @@ source("../R/company_pl.R")
 source("../R/params_indonesia.R")
 
 assets <- read_csv("../data/assets_companyA.csv")
+
+# ✅ Adddding validator right after reading CSV
+required_cols <- c(
+  "asset_id", "asset_value", "daily_revenue",
+  "gross_margin", "price_pass_through",
+  "insurance_deductible", "insurance_limit"
+)
+
+missing <- setdiff(required_cols, names(assets))
+if (length(missing)) {
+  stop("assets CSV is missing columns: ", paste(missing, collapse = ", "))
+}
+
+assets <- assets %>%
+  mutate(
+    asset_value = as.numeric(asset_value),
+    daily_revenue = as.numeric(daily_revenue),
+    gross_margin = coalesce(as.numeric(gross_margin), 0.35),
+    price_pass_through = coalesce(as.numeric(price_pass_through), 0.30),
+    insurance_deductible = coalesce(as.numeric(insurance_deductible), 0.01),
+    insurance_limit = coalesce(as.numeric(insurance_limit), 0.30)
+  )
 ```
 
 
