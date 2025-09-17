@@ -69,9 +69,17 @@ run_joint_path <- function(params_country, company_assets,
     } else {
       # Shock year: draw intensities per asset and compute P&L impact
       intensities <- replicate(nrow(company_assets), intensity_sampler())
+      # Protection multiplier: scale hazard if adaptation is active
+      prot_mult <- if (isTRUE(params_country$run_adaptation)) {
+        1 - params_country$adaptation_effectiveness
+      } else {
+        1
+      }
+      
       pl <- company_pl(
         assets_df = company_assets, intensities = intensities,
-        base_revenue = rev_t, base_cogs = base_cogs, base_opex = base_opex
+        base_revenue = rev_t, base_cogs = base_cogs, base_opex = base_opex,
+        prot_mult = prot_mult
       )
       out$EBIT[t] <- pl$ebit
       out$FCF[t]  <- pl$fcf

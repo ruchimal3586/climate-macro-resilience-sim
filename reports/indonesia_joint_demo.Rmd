@@ -7,48 +7,48 @@ output_dir: "../"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+knitr::opts_chunk$set(root.dir = here::here(), echo=FALSE, message=FALSE, warning=FALSE)
+
+
+
+
+
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(kableExtra)
 library(readr)
 library(scales)
+library(here)
 
-source("../R/simulate_debt_pathway.R")
-source("../R/run_joint_path.R")
-source("../R/run_joint_multiple.R")
-source("../R/company_pl.R")
-source("../R/params_indonesia.R")
+source(here("R", "simulate_debt_pathway.R"))
+source(here("R", "run_joint_path.R"))
+source(here("R", "run_joint_multiple.R"))
+source(here("R", "company_pl.R"))
+source(here("R", "params_indonesia.R"))
 
-assets <- read_csv("../data/assets_companyA.csv")
-
-# ✅ Adddding validator right after reading CSV
-required_cols <- c(
-  "asset_id", "asset_value", "daily_revenue",
-  "gross_margin", "price_pass_through",
-  "insurance_deductible", "insurance_limit"
-)
-
-missing <- setdiff(required_cols, names(assets))
-if (length(missing)) {
-  stop("assets CSV is missing columns: ", paste(missing, collapse = ", "))
-}
+assets <- readr::read_csv(here("data", "assets_companyA.csv"))
+need <- c("asset_id","asset_value","daily_revenue","gross_margin",
+          "price_pass_through","insurance_deductible","insurance_limit")
+miss <- setdiff(need, names(assets))
+if(length(miss)) stop("assets CSV is missing columns: ", paste(miss, collapse=", "))
 
 assets <- assets %>%
   mutate(
-    asset_value = as.numeric(asset_value),
-    daily_revenue = as.numeric(daily_revenue),
-    gross_margin = coalesce(as.numeric(gross_margin), 0.35),
-    price_pass_through = coalesce(as.numeric(price_pass_through), 0.30),
-    insurance_deductible = coalesce(as.numeric(insurance_deductible), 0.01),
-    insurance_limit = coalesce(as.numeric(insurance_limit), 0.30)
+    asset_value         = as.numeric(asset_value),
+    daily_revenue       = as.numeric(daily_revenue),
+    gross_margin        = coalesce(as.numeric(gross_margin), 0.35),
+    price_pass_through  = coalesce(as.numeric(price_pass_through), 0.30),
+    insurance_deductible= coalesce(as.numeric(insurance_deductible), 0.01),
+    insurance_limit     = coalesce(as.numeric(insurance_limit), 0.30)
   )
 ```
 
 
+## Run 3 scenarios: No-shock baseline, Baseline (no adaptation), adaptation
 ```{r}
 
-# Ensure horizon + adaptation toggle set
+# common macro params
 params_country <- list(
   years = 40,
   gdp_init = gdp_init, debt_init = debt_init,
@@ -57,162 +57,257 @@ params_country <- list(
   emergency_spend_pct = emergency_spend_pct,
   adaptation_cost_pct = adaptation_cost_pct,
   adaptation_years = adaptation_years,
-  adaptation_effectiveness = adaptation_effectiveness,
-  run_adaptation = TRUE
+  adaptation_effectiveness = adaptation_effectiveness
 )
 
+# variants
+params_noshock <- modifyList(params_country, list(shock_prob = 0, run_adaptation = FALSE))
+params_base    <- modifyList(params_country, list(run_adaptation = FALSE))
+params_adapt   <- modifyList(params_country, list(run_adaptation = TRUE))
+
 set.seed(42)
-joint <- run_joint_multiple(
-  n = 500,
-  params_country = params_country,
-  company_assets = assets,
+n_runs <- 500
+
+joint_base <- run_joint_multiple(
+  n = n_runs, params_country = params_base, company_assets = assets,
+  seed0 = 42, 
   base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
   demand_elasticity = 1.2,
   intensity_sampler = function() rgamma(1, shape=2, rate=1.1)
 )
 
-```
-
-
-```{r}
-summary_fc <- joint %>%
-  group_by(year) %>%
-  summarise(
-    FCF_p10 = quantile(FCF, 0.10, na.rm=TRUE),
-    FCF_p50 = quantile(FCF, 0.50, na.rm=TRUE),
-    FCF_p90 = quantile(FCF, 0.90, na.rm=TRUE),
-    Downtime_mean = mean(Downtime_days, na.rm=TRUE)
-  )
-
-macro <- joint %>%
-  group_by(year) %>%
-  summarise(
-    Debt_to_GDP = median(Debt_to_GDP, na.rm=TRUE),
-    ShockRate = mean(Shock, na.rm=TRUE)
-  )
-```
-
-```{r}
-
-summary_fc_m <- summary_fc %>%
-  mutate(across(starts_with("FCF_"), ~ . / 1e6))
-
-ggplot(summary_fc_m, aes(year, FCF_p50)) +
-  geom_ribbon(aes(ymin = FCF_p10, ymax = FCF_p90), alpha = 0.2) +
-  geom_line(size = 1) +
-  scale_y_continuous(labels = label_comma(), name = "FCF (millions)") +
-  labs(title = "FCF (P10–P90) under Macro-Conditioned Shocks",
-       subtitle = "Facility downtime → P&L → FCF distribution") +
-  theme_minimal()
-
-```
-
-```{r}
-# Baseline: same setup, but no shocks at all
-params_baseline <- params_country; params_baseline$shock_prob <- 0
-baseline <- run_joint_multiple(
-  n = 50,  # few runs to smooth out demand elasticity noise
-  params_country = params_baseline,
-  company_assets = assets,
+joint_adapt <- run_joint_multiple(
+  n = n_runs, params_country = params_adapt, company_assets = assets,
+  seed0 = 42,
   base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
   demand_elasticity = 1.2,
-  intensity_sampler = function() 0  # irrelevant; no shocks
+  intensity_sampler = function() rgamma(1, shape=2, rate=1.1)
 )
 
-baseline_fcf <- baseline %>%
-  group_by(year) %>%
-  summarise(FCF_base = median(FCF, na.rm = TRUE), .groups = "drop")
+# no-shock baseline for drawdowns
+baseline <- run_joint_multiple(
+  n = 50, params_country = params_noshock, company_assets = assets,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  demand_elasticity = 1.2,
+  intensity_sampler = function() 0
+) %>% group_by(year) %>% dplyr::summarise(FCF_base = median(FCF, na.rm=TRUE), .groups="drop")
 
-dd <- summary_fc %>%
-  left_join(baseline_fcf, by = "year") %>%
-  mutate(
-    dd_p50 = (FCF_p50 - FCF_base) / FCF_base,
-    dd_p10 = (FCF_p10 - FCF_base) / FCF_base,
-    dd_p90 = (FCF_p90 - FCF_base) / FCF_base
+
+```
+
+
+## Decision KPIs
+```{r}
+# ---- helper: KPIs of FCF shortfall vs a no-shock baseline ----
+calc_scenario_metrics <- function(joint_df, baseline_df) {
+ if ("FCF_base" %in% names(baseline_df)) {
+    base_by_year <- dplyr::select(baseline_df, year, FCF_base)
+  } else {
+    base_by_year <- baseline_df |>
+      dplyr::group_by(year) |>
+      dplyr::summarise(FCF_base = stats::median(FCF, na.rm = TRUE), .groups = "drop")
+  }
+
+  df <- joint_df |>
+    dplyr::left_join(base_by_year, by = "year") |>
+    dplyr::mutate(shortfall = FCF - FCF_base)   # negative is bad
+
+  sf <- df$shortfall[!is.na(df$shortfall)]
+  VaR95  <- unname(stats::quantile(sf, 0.05, na.rm = TRUE))
+  TVaR95 <- mean(sf[sf <= VaR95], na.rm = TRUE)
+  p_breach <- mean(df$FCF < 0, na.rm = TRUE)
+
+  eas_by_year <- df |>
+    dplyr::group_by(year) |>
+    dplyr::summarise(EAS_y = -mean(pmin(0, shortfall), na.rm = TRUE), .groups = "drop")
+  EAS <- mean(eas_by_year$EAS_y, na.rm = TRUE)
+
+  list(VaR95=VaR95, TVaR95=TVaR95, p_breach=p_breach, EAS=EAS, eas_by_year=eas_by_year)
+}
+
+
+```
+
+## Business case: NPV, ROI, payback
+
+```{r}
+# ---- metrics for Baseline vs Adaptation ----
+m_base  <- calc_scenario_metrics(joint_base,  baseline)
+m_adapt <- calc_scenario_metrics(joint_adapt, baseline)
+
+# ---- adaptation cost tied to company asset base ----
+adapt_pct_assets <- 0.003                             # .3% of asset base per year
+adapt_years      <- params_adapt$adaptation_years    # usually 5
+discount         <- 0.10
+
+company_asset_base <- sum(assets$asset_value, na.rm = TRUE)
+adapt_spend_year   <- adapt_pct_assets * company_asset_base
+
+years_vec   <- sort(unique(joint_base$year))
+cost_by_year <- ifelse(years_vec <= adapt_years, adapt_spend_year, 0)
+
+# ---- avoided shortfall (benefit) each year ----
+bens_by_year <- dplyr::left_join(
+  m_base$eas_by_year |> dplyr::rename(EAS_base = EAS_y),
+  m_adapt$eas_by_year |> dplyr::rename(EAS_adapt = EAS_y),
+  by = "year"
+) |>
+  dplyr::mutate(benefit_y = (EAS_base - EAS_adapt))  # positive = adaptation reduces shortfall
+
+npv <- function(x, r) sum(x / (1 + r)^(seq_along(x) - 1))
+NPV_benefit <- npv(bens_by_year$benefit_y, discount)
+NPV_cost    <- npv(cost_by_year,          discount)
+ROI         <- (NPV_benefit - NPV_cost) / NPV_cost
+
+cum_net <- cumsum(bens_by_year$benefit_y - cost_by_year)/ (1 + discount)^(seq_along(years_vec) - 1)
+payback_year <- years_vec[which(cum_net > 0)[1]]
+if (length(payback_year) == 0) payback_year <- NA
+
+
+```
+
+## Two-row decision KPI table
+
+<small> *These metrics summarize the company-level cash flow results produced by the micro simulator. In shock years, asset-level intensities are sampled, mapped to damage and downtime, and translated into EBIT/FCF via <code>company_pl()</code>. The values below aggregate 500 Monte Carlo paths.* <small>
+
+```{r}
+
+
+
+# % with 1 decimal, handle NAs
+fmt_pct1 <- function(x) ifelse(is.na(x), "", sprintf("%.1f%%", x * 100))
+
+# dollars with thousands separators, 0 decimals, handle NAs
+fmt_dol0 <- function(x) {
+  ifelse(is.na(x), "", formatC(round(x, 0), format = "f", big.mark = ",", digits = 0))
+}
+
+
+# 1) Build a NUMERIC table 
+kpis_tbl_num <- dplyr::bind_rows(
+  tibble::tibble(
+    Scenario = "Baseline (no adaptation)",
+    P_lt0                = m_base$p_breach,   # numeric in [0,1]
+    VaR95                = m_base$VaR95,      # numeric $
+    TVaR95               = m_base$TVaR95,     # numeric $
+    EAS                  = m_base$EAS,        # numeric $
+    NPV_benefit          = NA_real_,          # blanks will render as ""
+    NPV_cost             = NA_real_,
+    ROI                  = NA_real_,          # numeric in [-1, +∞), or NA
+    Payback_yr           = NA_real_
+  ),
+  tibble::tibble(
+    Scenario = "Adaptation",
+    P_lt0                = m_adapt$p_breach,
+    VaR95                = m_adapt$VaR95,
+    TVaR95               = m_adapt$TVaR95,
+    EAS                  = m_adapt$EAS,
+    NPV_benefit          = NPV_benefit,
+    NPV_cost             = NPV_cost,
+    ROI                  = if (is.finite(ROI)) ROI else NA_real_,
+    Payback_yr           = suppressWarnings(as.numeric(payback_year))
+  )
+)
+
+kpis_tbl_fmt <- kpis_tbl_num |>
+  dplyr::mutate(
+    `P(FCF < 0)`                      = fmt_pct1(P_lt0),
+    `VaR(95) shortfall (USD)`         = fmt_dol0(VaR95),
+    `TVaR(95) shortfall (USD)`        = fmt_dol0(TVaR95),
+    `Expected annual shortfall (USD)` = fmt_dol0(EAS),
+    `NPV(benefit, USD)`               = fmt_dol0(NPV_benefit),
+    `NPV(cost, USD)`                  = fmt_dol0(NPV_cost),
+    ROI                               = ifelse(is.na(ROI), "", sprintf("%.1f%%", ROI)),
+    `Payback (yr)`                    = ifelse(is.na(Payback_yr), "", sprintf("%.1f", Payback_yr))
+  ) |>
+  dplyr::select(
+    Scenario, `P(FCF < 0)`, `VaR(95) shortfall (USD)`, `TVaR(95) shortfall (USD)`,
+    `Expected annual shortfall (USD)`, `NPV(benefit, USD)`, `NPV(cost, USD)`, ROI, `Payback (yr)`
   )
 
-ggplot(dd, aes(year, dd_p50)) +
-  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
-  geom_line(size = 1) +
-  scale_y_continuous(labels = percent, name = "FCF drawdown vs no-shock baseline") +
-  labs(title = "Shock Impact on FCF (P10–P90)",
-       subtitle = "Percent deviation from a no-shock baseline") +
-  theme_minimal()
+# 2) Render with kable/kableExtra: format at render time, fix header, set widths
+kableExtra::kable(
+  kpis_tbl_fmt,
+  format = "html",
+  align  = c("l","r","r","r","r","r","r","r","r"),
+  escape = TRUE,
+  caption =  "Resilience KPIs (shortfalls vs no-shock baseline"
+  )|>
+  kableExtra::kable_styling(
+    bootstrap_options = c("striped","hover","condensed"),
+    full_width = FALSE,
+    position = "left",
+    font_size = 12     
+  ) |>
+  # Optional: control widths so wrapped headers don’t look “all over”
+  kableExtra::column_spec(1, width = "16em", bold = TRUE) |>
+  kableExtra::column_spec(2:9, width = "11em")
 
 ```
 
 
-```{r}
 
-ggplot(dd, aes(year, dd_p50)) +
-  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
-  geom_line(size = 1) +
-  geom_segment(data = macro %>% filter(ShockRate > 0),
-               aes(x = year, xend = year, y = -0.02, yend = -0.01, alpha = ShockRate),
-               inherit.aes = FALSE) +
-  scale_alpha(range = c(0.2, 0.8), guide = "none") +
-  scale_y_continuous(labels = percent, name = "FCF drawdown vs baseline") +
-  labs(title = "Shock Timing/Rate vs FCF Drawdown",
-       subtitle = "Ticks at bottom indicate higher realized shock rates") +
-  theme_minimal()
+# ---- EP of FCF Shortfall ----------
+```{r EP, echo=FALSE, message=FALSE, warning=FALSE}
 
+# build comparable shortfall draws for each scenario
+get_shortfalls <- function(joint_df, base_df){
+  jf <- joint_df %>% group_by(year) %>%
+    mutate(FCF_base = base_df$FCF_base[match(year, base_df$year)],
+           shortfall = FCF - FCF_base) %>%
+    ungroup()
+  jf$shortfall
+}
+sf_base  <- get_shortfalls(joint_base,  baseline)
+sf_adapt <- get_shortfalls(joint_adapt, baseline)
 
-```
+make_ep <- function(x){
+  probs <- seq(0.001, 0.99, by=.001)
+  tibble(ep = probs, loss = quantile(x, probs = 1 - probs, na.rm=TRUE))
+}
+ep_b <- make_ep(sf_base);  ep_b$Scenario <- "Baseline"
+ep_a <- make_ep(sf_adapt); ep_a$Scenario <- "Adaptation"
+ep_all <- bind_rows(ep_b, ep_a)
 
-```{r}
-
-# 1) Pick a scaling constant from your drawdown band
-k <- abs(min(dd$dd_p10, dd$dd_p90, na.rm = TRUE))  # e.g., ~0.40
-
-# 2) Join macro shock rate and create a scaled version for plotting
-dd_plot <- dd %>%
-  left_join(macro %>% select(year, ShockRate), by = "year") %>%
-  mutate(ShockRate_scaled = -ShockRate * k)
-
-# 3) Plot: FCF drawdown band + median + shock probability (right axis)
-ggplot(dd_plot, aes(x = year)) +
-  # FCF drawdown band (P10–P90)
-  geom_ribbon(aes(ymin = dd_p10, ymax = dd_p90), alpha = 0.2) +
-  # FCF median
-  geom_line(aes(y = dd_p50, color = "FCF drawdown (median)"), size = 1) +
-  # Shock probability, scaled to left axis; right axis shows true 0–1
-  geom_line(aes(y = ShockRate_scaled, color = "Shock probability"),
-            size = 1, linetype = "dashed") +
-  scale_y_continuous(
-    labels = percent, name = "FCF drawdown vs baseline",
-    sec.axis = sec_axis(~ -./k, name = "Shock probability")
-  ) +
-  scale_color_manual(values = c("FCF drawdown (median)" = "black",
-                                "Shock probability" = "gray30")) +
-  labs(title = "Macro hazard vs corporate FCF",
-       subtitle = "Median FCF drawdown (band shows P10–P90) with shock probability (right axis)") +
-  theme_minimal() +
-  theme(legend.title = element_blank())
-
-
-```
-
-
-```{r}
-
-ggplot(macro, aes(year, Debt_to_GDP)) +
+ggplot(ep_all, aes(ep, loss, color = Scenario)) +
   geom_line(size=1) +
-  labs(
-    title = "Median Debt-to-GDP (Macro Context)",
-    y = "Debt/GDP", x = "Year"
-  ) +
+  scale_x_reverse(labels = percent) +
+  scale_y_continuous(labels = dollar) +
+  labs(title = "EP Curve — Annual FCF Shortfall", x = "Exceedance Probability", y = "Shortfall ($)") +
+  theme_minimal()
+
+
+```
+
+# band chart (p10-p90 show risk tightening with adaptation)
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE}
+summ <- function(joint_df, label){
+  joint_df %>% group_by(year) %>%
+    summarise(p10 = quantile(FCF,.10,na.rm=TRUE),
+              p50 = quantile(FCF,.50,na.rm=TRUE),
+              p90 = quantile(FCF,.90,na.rm=TRUE), .groups="drop") %>%
+    mutate(Scenario = label)
+}
+sb <- summ(joint_base,"Baseline"); sa <- summ(joint_adapt,"Adaptation")
+bands <- bind_rows(sb,sa)
+
+ggplot(bands, aes(year, p50, color=Scenario, fill=Scenario)) +
+  geom_ribbon(aes(ymin=p10, ymax=p90), alpha=.15, color=NA) +
+  geom_line(size=1) +
+  scale_y_continuous(labels = label_dollar(scale=1e-6, suffix="MM")) +
+  labs(title="FCF bands (P10–P90) — Baseline vs Adaptation",
+       y="FCF ($MM)", x="Year", color="", fill="") +
   theme_minimal()
 
 ```
 
 
-```{r }
-knitr::kable(
-  head(joint %>% select(year, Shock, EBIT, FCF, Downtime_days, Debt_to_GDP)),
-  digits = 2,
-  caption = "Sample of joint macro→micro outputs"
-)
+**Key Results:**  
+- Adaptation reduces tail losses: VaR(95) improves from –$98M to –$34M.  
+- Expected annual shortfalls shrink by ~60%.  
+- EP curves show less extreme downside in rare events.  
+- FCF bands tighten, lowering uncertainty and stabilizing medians.  
+Overall, adaptation strengthens corporate resilience by reducing both the frequency and severity of negative FCF outcomes.
 
-
-```
 

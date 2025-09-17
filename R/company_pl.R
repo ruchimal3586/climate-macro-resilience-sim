@@ -4,18 +4,20 @@
 # ------------------------------------------------------------------------------
 
 # Vulnerability curve: intensity -> damage ratio (toy)
-damage_ratio <- function(intensity) pmin(1, 0.03 * intensity^1.4)
+damage_ratio <- function(intensity, prot = 1) pmin(1, 0.03 *  (intensity * prot)^1.4)
 
 # Downtime curve: intensity -> lost days (toy)
-downtime_days <- function(intensity) round(pmin(180, 2 + 12 * intensity))
+downtime_days <- function(intensity, prot = 1) round(pmin(180, 2 + 12 * (intensity * prot)))
 
 # Per-asset impact model
+
 asset_impact <- function(asset_value, intensity, daily_revenue,
-                         gross_margin = 0.35, price_pass_through = 0.3,
-                         insurance_deductible = 0.01, insurance_limit = 0.30) {
+                        gross_margin = 0.35, price_pass_through = 0.3,
+                        insurance_deductible = 0.01, insurance_limit = 0.30,
+                        prot_mult = 1){
   
-  dr <- damage_ratio(intensity)
-  dd <- downtime_days(intensity)
+  dr <- damage_ratio(intensity, prot=prot_mult)
+  dd <- downtime_days(intensity, prot=prot_mult)
   
   # Physical repair cost and simple insurance recovery
   repair_cost <- asset_value * dr
@@ -39,7 +41,8 @@ asset_impact <- function(asset_value, intensity, daily_revenue,
 # Company-level P&L for one period given asset intensities
 company_pl <- function(assets_df, intensities,
                        base_revenue, base_cogs, base_opex,
-                       tax_rate = 0.25, adaptation_capex = 0) {
+                       tax_rate = 0.25, adaptation_capex = 0, 
+                       prot_mult = 1) {
   
   stopifnot(length(intensities) == nrow(assets_df))
   
@@ -51,7 +54,8 @@ company_pl <- function(assets_df, intensities,
               gross_margin = assets_df$gross_margin,
               price_pass_through = assets_df$price_pass_through,
               insurance_deductible = assets_df$insurance_deductible,
-              insurance_limit = assets_df$insurance_limit)
+              insurance_limit = assets_df$insurance_limit,
+              prot_mult = prot_mult)
   
   agg <- Reduce(function(a,b) Map(`+`, a, b), imps)
   
