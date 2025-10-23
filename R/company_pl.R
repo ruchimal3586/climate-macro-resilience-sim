@@ -67,7 +67,7 @@ company_pl <- function(assets_df, intensities,
   
   tax     <- pmax(0, ebit) * tax_rate
   nopat   <- ebit - tax
-  d_and_a <- 0.04 * base_revenue                    # simple proxy
+  d_and_a <- 0.04 * base_revenue                   # simple proxy
   capex   <- adaptation_capex + agg$net_repair      # treat repair as capex
   d_nwc   <- 0.05 * agg$lost_revenue                # friction in working capital
   

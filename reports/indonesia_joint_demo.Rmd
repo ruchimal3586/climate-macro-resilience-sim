@@ -46,6 +46,17 @@ assets <- assets %>%
 
 
 ## Run 3 scenarios: No-shock baseline, Baseline (no adaptation), adaptation
+<small> *The code below constructs three simulation variants.
+1.No-shock baseline, where GDP grows steadily without disasters;
+
+2.Baseline (no adaptation), where stochastic shocks affect GDP and corporate cash flows; and
+
+3.Adaptation, where resilience measures dampen disaster intensity and fiscal strain.
+
+Each scenario is run 500 times using the a Monte Carlo engine, which links sovereign-level debt and GDP shocks to firm-level cash flows (FCF). Then every scenario is benchmarked against the no-shock baseline by year, computing loss-based KPIs: the 95th-percentile shortfall (VaR₉₅), tail conditional shortfall (TVaR₉₅), probability of negative cash flow (P(FCF < 0)), and the expected annual shortfall (EAS).* <small>
+
+
+
 ```{r}
 
 # common macro params
@@ -71,7 +82,7 @@ n_runs <- 500
 joint_base <- run_joint_multiple(
   n = n_runs, params_country = params_base, company_assets = assets,
   seed0 = 42, 
-  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8, base_rate = .06,
   demand_elasticity = 1.2,
   intensity_sampler = function() rgamma(1, shape=2, rate=1.1)
 )
@@ -79,38 +90,56 @@ joint_base <- run_joint_multiple(
 joint_adapt <- run_joint_multiple(
   n = n_runs, params_country = params_adapt, company_assets = assets,
   seed0 = 42,
-  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8, base_rate = .06,
   demand_elasticity = 1.2,
   intensity_sampler = function() rgamma(1, shape=2, rate=1.1)
 )
 
 # no-shock baseline for drawdowns
 baseline <- run_joint_multiple(
-  n = 50, params_country = params_noshock, company_assets = assets,
-  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8,
+  n = 200, params_country = params_noshock, company_assets = assets,
+  base_rev = 1.1e9, base_cogs = 6.8e8, base_opex = 2.1e8, base_rate = .06,
   demand_elasticity = 1.2,
   intensity_sampler = function() 0
 ) %>% group_by(year) %>% dplyr::summarise(FCF_base = median(FCF, na.rm=TRUE), .groups="drop")
 
+baseline_as_joint <- baseline |> dplyr::transmute(year, FCF = FCF_base)
 
 ```
 
 
-## Decision KPIs
+
 ```{r}
+## Decision KPIs
 # ---- helper: KPIs of FCF shortfall vs a no-shock baseline ----
+
+
+
 calc_scenario_metrics <- function(joint_df, baseline_df) {
- if ("FCF_base" %in% names(baseline_df)) {
+  stopifnot("year" %in% names(joint_df))
+  stopifnot("FCF"  %in% names(joint_df))
+  
+  if ("FCF_base" %in% names(baseline_df)) {
     base_by_year <- dplyr::select(baseline_df, year, FCF_base)
   } else {
     base_by_year <- baseline_df |>
       dplyr::group_by(year) |>
       dplyr::summarise(FCF_base = stats::median(FCF, na.rm = TRUE), .groups = "drop")
   }
+  
+  # Ensure the join key has the same type on both sides
+  joint_df <- dplyr::mutate(joint_df, year = as.integer(year))
+  base_by_year  <- dplyr::mutate(base_by_year,  year = as.integer(year))
 
   df <- joint_df |>
-    dplyr::left_join(base_by_year, by = "year") |>
-    dplyr::mutate(shortfall = FCF - FCF_base)   # negative is bad
+    dplyr::left_join(base_by_year, by = "year")
+  
+  if (!("FCF_base" %in% names(df))) {
+    stop("Join failed: 'FCF_base' is missing after left_join(). ",
+         "Check that 'baseline_df' really has (year, FCF_base) and that 'year' types match.")
+  }
+  
+  df <- df %>% dplyr::mutate(shortfall = FCF - FCF_base)   # negative is bad
 
   sf <- df$shortfall[!is.na(df$shortfall)]
   VaR95  <- unname(stats::quantile(sf, 0.05, na.rm = TRUE))
@@ -128,12 +157,14 @@ calc_scenario_metrics <- function(joint_df, baseline_df) {
 
 ```
 
-## Business case: NPV, ROI, payback
+
 
 ```{r}
-# ---- metrics for Baseline vs Adaptation ----
+## Business case: NPV, ROI, payback
+# ---- metrics for Baseline vs Adaptation vs no shock ----
 m_base  <- calc_scenario_metrics(joint_base,  baseline)
 m_adapt <- calc_scenario_metrics(joint_adapt, baseline)
+m_noshock <- calc_scenario_metrics(baseline_as_joint, baseline)
 
 # ---- adaptation cost tied to company asset base ----
 adapt_pct_assets <- 0.003                             # .3% of asset base per year
@@ -166,7 +197,7 @@ if (length(payback_year) == 0) payback_year <- NA
 
 ```
 
-## Two-row decision KPI table
+## Three-row decision KPI table
 
 <small> *These metrics summarize the company-level cash flow results produced by the micro simulator. In shock years, asset-level intensities are sampled, mapped to damage and downtime, and translated into EBIT/FCF via <code>company_pl()</code>. The values below aggregate 500 Monte Carlo paths.* <small>
 
@@ -183,8 +214,20 @@ fmt_dol0 <- function(x) {
 }
 
 
+
 # 1) Build a NUMERIC table 
 kpis_tbl_num <- dplyr::bind_rows(
+   tibble::tibble(
+    Scenario =         "No-shock baseline",
+    P_lt0 =             m_noshock$p_breach,
+    VaR95 =             m_noshock$VaR95,
+    TVaR95 =            m_noshock$TVaR95,
+    EAS =               m_noshock$EAS,
+    NPV_benefit =       NA_real_,
+    NPV_cost =          NA_real_,
+    ROI =               NA_real_,
+    Payback_yr =        NA_real_
+  ),
   tibble::tibble(
     Scenario = "Baseline (no adaptation)",
     P_lt0                = m_base$p_breach,   # numeric in [0,1]
@@ -231,7 +274,7 @@ kableExtra::kable(
   format = "html",
   align  = c("l","r","r","r","r","r","r","r","r"),
   escape = TRUE,
-  caption =  "Resilience KPIs (shortfalls vs no-shock baseline"
+  caption =  "Resilience KPIs (shortfalls vs no-shock baseline)"
   )|>
   kableExtra::kable_styling(
     bootstrap_options = c("striped","hover","condensed"),
@@ -267,7 +310,9 @@ make_ep <- function(x){
 }
 ep_b <- make_ep(sf_base);  ep_b$Scenario <- "Baseline"
 ep_a <- make_ep(sf_adapt); ep_a$Scenario <- "Adaptation"
-ep_all <- bind_rows(ep_b, ep_a)
+sf_noshock <- baseline_as_joint$FCF - baseline$FCF_base
+ep_n <- make_ep(sf_noshock); ep_n$Scenario <- "No-shock"
+ep_all <- dplyr::bind_rows(ep_b, ep_a, ep_n)
 
 ggplot(ep_all, aes(ep, loss, color = Scenario)) +
   geom_line(size=1) +
@@ -278,6 +323,15 @@ ggplot(ep_all, aes(ep, loss, color = Scenario)) +
 
 
 ```
+
+**EP Curve**
+
+* The EP (Exceedance Probability) curve shows the distribution of annual FCF shortfalls across 500 Monte Carlo runs.
+The curve’s shape highlights how financing spreads amplify downside risk: under baseline conditions, higher sovereign leverage pushes firm borrowing costs upward, deepening rare-event losses (steeper left tail).
+Adaptation compresses this tail — fewer severe shortfalls remain, and the 95th percentile (VaR) loss shrinks by ~25%, demonstrating stabilizing physical cashflow and 
+limited credit spread transmission from macro stress to corporate balance sheet.*
+
+
 
 # band chart (p10-p90 show risk tightening with adaptation)
 
