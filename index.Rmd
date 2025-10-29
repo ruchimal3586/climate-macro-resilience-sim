@@ -1,7 +1,7 @@
 ---
 title: "index"
 author: "Ruchi Malhotra"
-date: "2025-08-08"
+date: "2025-10-05"
 output: html_document
 ---
 
@@ -9,3 +9,4 @@ output: html_document
 
 - [Indonesia adaptation (macro)](indonesia_simulation.html)
 - [Macro → corporate cash flow demo](indonesia_joint_demo.html)
+- **Structured walkthrough (1-pager):** [walkthrough.html](walkthrough.html)
