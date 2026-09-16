@@ -1,0 +1,86 @@
+---
+title: "Resilience simualtor - walkthrough"
+author: "Ruchi Malhotra"
+date: "2025-10-29"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    theme: cosmo
+output_dir: "../"
+---
+
+
+> Below is a structured walkthrough so you can parse the simulators quickly, set them up, and see where to calibrate.
+
+## 1) What the simulator is
+**Goal:** Connect sovereign-level climate shocks (GDP hits, emergency spend, debt dynamics) to firm-level P&L/FCF via per-asset damage & downtime.
+
+**Two layers:**
+- **Macro (country):** stochastic shocks via Bernoulli (frequency) + severity (Gamma by default); GDP loss applied multiplicatively; disaster emergency spend added; debt evolves from primary balance; spreads widen with Debt/GDP.
+- **Micro (company/assets):** in shock years sample intensity per asset → map to damage ratio & downtime → repair capex, lost revenue, margin compression, surge opex → EBIT/FCF.
+- **Adaptation lever:** program cost for N years; effectiveness (e.g., 85%) implemented as a protection multiplier that scales intensities before damage/downtime.
+
+## 2) Folder & file responsibilities (what to open first)
+
+- `R/simulate_debt_pathway.R` (**macro**)  
+  Draw shock/no-shock; apply GDP loss & emergency spend; update Debt and Debt/GDP; compute spread add-on from ΔDebt/GDP.
+
+- `R/company_pl.R` (**micro**)  
+  Given per-asset intensities (or none in normal years), compute per-asset impacts then aggregate to company EBIT/FCF. Helpers inside:  
+  `damage_ratio(intensity)` (convex; capped at 1)  
+  `downtime_days(intensity)` (linear-plus; capped)  
+  `asset_impact(...)` (repair, insurance recovery, lost revenue, lost gross profit, surge opex)
+
+- `R/run_joint_path.R` (**bridge: macro → micro**)  
+  For each year: run macro, and if `Shock == TRUE`, sample one intensity per asset (`intensity_sampler()`), then call `company_pl(...)`.
+
+- `R/run_joint_multiple.R` (**orchestrator / Monte Carlo**)  
+  Run `run_joint_path(...)` *n* times with different seeds; row-bind; label with `sim_id` and `Scenario`.
+
+- `params/params_country_*.R`  
+  Country knobs (`GDP_0`, `Debt_0`, `rev_ratio`, `spend_ratio`, `shock_prob`, `shock_loss_pct`, `emergency_spend_pct`, adaptation params, horizon).
+
+- `data/assets_companyA.csv`  
+  One row per facility: `asset_value`, `daily_revenue`, `gross_margin`, `price_pass_through`, `insurance_deductible`, `insurance_limit`, (optionally asset type, region).
+
+- `reports/indonesia_joint_demo.Rmd`  
+  Wires everything: loads params & assets, runs Monte Carlo, computes percentiles/EP curves/VaR/TVaR, and plots.
+
+## 3) How the macro accounting works
+- Structural balance: `rev_ratio = 0.14`, `spend_ratio = 0.18` → ~4% of GDP primary deficit in normal years.  
+- **Shock mechanics:**
+  - GDP loss: `gdp <- gdp * (1 - shock_loss_pct)` (proportional drop)
+  - Emergency spend: `spend <- spend + gdp * emergency_spend_pct` (one-off, widens deficit)
+  - Debt update: `Debt_{t+1} = Debt_t + (Spending_t + Emergency_t + Adaptation_t − Revenue_t)`; track `Debt/GDP`.
+  - Spreads: linear rule (bps per 10pp ΔDebt/GDP) to proxy tighter financing conditions.
+
+## 4) How the micro P&L works (per-asset → company)
+- **Per-asset physics/ops:**  
+  `damage_ratio(intensity) = pmin(1, a * intensity^b)` (convex; peril-specific in calibrated version)  
+  `downtime_days(intensity) = pmin(Dmax, c + d*intensity)`  
+- **Insurance & economics:** deductible/limit on repair; partial price pass-through; gross margin governs profit hit; surge opex & ΔNWC as parsimonious frictions.  
+- **Company P&L mapping:** lost revenue → margin compression; add surge opex + net repair capex; compute EBIT → NOPAT → FCF (with D&A proxy and ΔNWC).
+
+## 5) Adaptation implementation
+- **Cost:** `adaptation_cost_pct * GDP` for `adaptation_years`.  
+- **Effectiveness:** `prot_mult = 1 - effectiveness` (e.g., 0.15 for 85%).  
+- **Use:** apply `damage_ratio(intensity * prot_mult)` and `downtime_days(intensity * prot_mult)` → lower capex/losses → higher EBIT/FCF in shock years.  
+- **Business case:** Compare `NPV(avoided shortfall)` vs `NPV(adaptation cost)` → ROI & payback.
+
+## 6) Calibration & empirical pathways (enhancements)
+- On macro severity, move beyond assumptions: estimate emergency-spend and GDP-loss shares empirically by combining event catalogs (e.g., EM-DAT/BTrACS) with national accounts (World Bank/IMF), then run simple econometric regressions to isolate climate-shock GDP dips.  
+- The Indonesia demo currently doesn’t assume BAU GDP growth; adding that dynamic would shift the illustration.  
+- For the micro layer, replace generic intensity draws with peril- and asset-specific distributions and vulnerability/downtime curves (vendor or literature). A factory exposed to flooding behaves differently from a substation under wildfire stress.
+
+## 7) Key assumptions to keep in view
+- Bernoulli + Gamma process drives tail shape (VaR/TVaR sensitive).  
+- Convex damage & capped downtime stabilize numerics but still produce fat-tail impacts.- Spread rule is a reduced-form proxy; can be replaced with a term-structure or sovereign risk model if needed.
+
+## 8) Quick mental model of data flow
+- Rmd loads assets_companyA.csv. 
+- run_joint_path() runs the sovereign path; in shock years it draws per-asset intensities. 
+- company_pl() turns those intensities + finance knobs into per-asset losses, then company EBIT/FCF. 
+- run_joint_multiple() repeats to produce distributions and EP curves.
+
